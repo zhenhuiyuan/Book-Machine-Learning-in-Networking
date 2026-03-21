@@ -1,0 +1,166 @@
+#Copyright@Zhenhui Yuan, 2025
+
+# copyright@2025, Zhenhui Yuan
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+
+
+# Network Environment
+class NetworkEnv:
+    def __init__(self):
+        self.cwnd = 1  # initial congestion window size
+        self.max_cwnd = 100
+        self.min_cwnd = 1
+        self.packet_loss = 0.01
+        self.throughput = self.calculate_throughput()
+
+    def calculate_throughput(self):
+        return min(self.cwnd * (1 - self.packet_loss), 100)
+
+    def step(self, action):
+        if action == 0 and self.cwnd > self.min_cwnd:
+            self.cwnd -= 1
+        elif action == 2 and self.cwnd < self.max_cwnd:
+            self.cwnd += 1
+        # action 1: maintain cwnd
+
+        self.packet_loss = min(0.5, max(0.01, self.cwnd / 100 + random.uniform(-0.05, 0.05)))
+        self.throughput = self.calculate_throughput()
+
+        if self.packet_loss < 0.1:
+            state = 0  # low loss
+        elif self.packet_loss < 0.3:
+            state = 1  # medium loss
+        else:
+            state = 2  # high loss
+
+        reward = self.throughput - 50 * self.packet_loss
+        return state, reward
+
+
+# Q-Learning Agent
+class QLearningAgent:
+    def __init__(self, num_states, num_actions):
+        self.q_table = np.zeros((num_states, num_actions))
+        self.alpha = 0.1
+        self.gamma = 0.9
+        self.epsilon = 0.5  # Higher initial exploration
+
+    def choose_action(self, state, episode, total_episodes):
+        # Epsilon decay for better exploration
+        epsilon = self.epsilon * (1 - episode / total_episodes)
+        if random.uniform(0, 1) < epsilon:
+            return random.randint(0, 2)  # explore
+        return np.argmax(self.q_table[state])  # exploit
+
+    def update_q_table(self, state, action, reward, next_state):
+        best_next_action = np.argmax(self.q_table[next_state])
+        td_target = reward + self.gamma * self.q_table[next_state, best_next_action]
+        td_error = td_target - self.q_table[state, action]
+        self.q_table[state, action] += self.alpha * td_error
+
+
+# AIMD-based Congestion Control
+class AIMDAgent:
+    def __init__(self):
+        self.cwnd = 1
+        self.max_cwnd = 100
+        self.min_cwnd = 1
+
+    def step(self, packet_loss):
+        # AIMD: Additive increase if no loss, multiplicative decrease if loss
+        if packet_loss > 0.1:  # Threshold for "loss event"
+            self.cwnd = max(self.min_cwnd, self.cwnd * 0.5)  # Multiplicative decrease
+        else:
+            self.cwnd = min(self.max_cwnd, self.cwnd + 1)  # Additive increase
+        return self.cwnd
+
+
+# Modified Training and Comparison
+def train_and_compare(episodes=1000, steps_per_episode=50):
+    env = NetworkEnv()
+    agent = QLearningAgent(num_states=3, num_actions=3)
+    aimd_agent = AIMDAgent()
+
+    rl_cwnd_history = []
+    rl_state_history = []
+    aimd_cwnd_history = []
+
+    for episode in range(episodes):
+        state = 0
+        total_reward = 0
+        env.cwnd = 1
+        aimd_agent.cwnd = 1
+
+        for step in range(steps_per_episode):
+            # RL step
+            action = agent.choose_action(state, episode, episodes)
+            next_state, reward = env.step(action)
+            agent.update_q_table(state, action, reward, next_state)
+            rl_cwnd_history.append(env.cwnd)
+            rl_state_history.append(next_state)
+            state = next_state
+            total_reward += reward
+
+            # AIMD step
+            aimd_cwnd = aimd_agent.step(env.packet_loss)
+            aimd_cwnd_history.append(aimd_cwnd)
+
+        if episode % 100 == 0:
+            print(
+                f"Episode {episode}, Total Reward: {total_reward:.2f}, RL cwnd: {env.cwnd}, Packet Loss: {env.packet_loss:.3f}")
+
+    # Calculate statistics
+    rl_avg = np.mean(rl_cwnd_history)
+    rl_var = np.var(rl_cwnd_history)
+    aimd_avg = np.mean(aimd_cwnd_history)
+    aimd_var = np.var(aimd_cwnd_history)
+
+    print("\nStatistics:")
+    print(f"RL - Average cwnd: {rl_avg:.2f}, Variance: {rl_var:.2f}")
+    print(f"AIMD - Average cwnd: {aimd_avg:.2f}, Variance: {aimd_var:.2f}")
+
+    return agent, rl_cwnd_history, rl_state_history, aimd_cwnd_history
+
+
+# Modified Plotting Results
+def plot_results(rl_cwnd_history, rl_state_history, aimd_cwnd_history):
+    episodes = len(rl_cwnd_history)
+    time_steps = range(episodes)
+
+    # Full timeline plot
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(2, 1, 1)
+    plt.plot(time_steps, rl_cwnd_history, 'b-', label='RL cwnd', alpha=0.7)
+    plt.plot(time_steps, aimd_cwnd_history, 'r-', label='AIMD cwnd', alpha=0.7)
+    plt.xlabel('Time Steps')
+    plt.ylabel('Congestion Window Size')
+    plt.title('RL vs AIMD Congestion Window (Full Timeline)')
+    plt.legend()
+    plt.grid(True)
+
+    # Zoomed-in plot (first 200 steps to show AIMD sawtooth)
+    plt.subplot(2, 1, 2)
+    zoom_steps = 200
+    plt.plot(time_steps[:zoom_steps], rl_cwnd_history[:zoom_steps], 'b-', label='RL cwnd', alpha=0.7)
+    plt.plot(time_steps[:zoom_steps], aimd_cwnd_history[:zoom_steps], 'r-', label='AIMD cwnd', alpha=0.7)
+    plt.xlabel('Time Steps')
+    plt.ylabel('Congestion Window Size')
+    plt.title('Zoomed View (First 200 Steps)')
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# Run simulation
+if __name__ == "__main__":
+    episodes = 1000
+    steps_per_episode = 50
+    trained_agent, rl_cwnd_history, rl_state_history, aimd_cwnd_history = train_and_compare(episodes, steps_per_episode)
+    print("\nFinal Q-Table:")
+    print(trained_agent.q_table)
+    plot_results(rl_cwnd_history, rl_state_history, aimd_cwnd_history)

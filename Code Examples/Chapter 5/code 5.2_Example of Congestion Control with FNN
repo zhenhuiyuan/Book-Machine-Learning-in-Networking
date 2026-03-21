@@ -1,0 +1,94 @@
+#Copyright@Zhenhui Yuan, 2025
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+import random
+
+
+# Sigmoid activation function
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+
+# Derivative of sigmoid for backpropagation
+def sigmoid_derivative(x):
+    return x * (1 - x)
+
+
+class SimpleFNN:
+    def __init__(self, input_size, learning_rate=0.01):
+        # Initialize weights and bias for single layer
+        self.weights = np.random.uniform(size=(input_size, 1))
+        self.bias = np.random.uniform(size=(1, 1))
+        self.lr = learning_rate
+
+    def forward(self, X):
+        # Forward pass: input -> output
+        self.z = np.dot(X, self.weights) + self.bias
+        self.output = sigmoid(self.z)
+        return self.output
+
+    def backward(self, X, y, output):
+        # Backward pass: update weights and bias
+        self.error = y - output
+        self.delta = self.error * sigmoid_derivative(output)
+
+        # Update weights and bias
+        self.weights += self.lr * np.dot(X.T, self.delta)
+        self.bias += self.lr * np.sum(self.delta, axis=0, keepdims=True)
+
+    def train(self, X, y, epochs):
+        for _ in range(epochs):
+            output = self.forward(X)
+            self.backward(X, y, output)
+
+
+# Simulated TCP congestion control data generator
+def generate_training_data(samples=1000):
+    X = []  # Features: [packet_loss_rate, rtt, throughput]
+    y = []  # Labels: 1 (increase window), 0 (decrease window)
+
+    for _ in range(samples):
+        packet_loss = random.uniform(0, 0.1)  # 0-10% packet loss
+        rtt = random.uniform(10, 200)  # RTT in ms
+        throughput = random.uniform(1, 100)  # Mbps
+
+        # Simple heuristic for label
+        # Increase window if low loss and reasonable RTT
+        if packet_loss < 0.02 and rtt < 100:
+            label = 1
+        else:
+            label = 0
+
+        X.append([packet_loss, rtt, throughput])
+        y.append([label])
+
+    return np.array(X), np.array(y)
+
+
+# Main execution
+if __name__ == "__main__":
+    # Generate synthetic training data
+    X, y = generate_training_data(1000)
+
+    # Normalize the input features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Initialize and train the FNN
+    fnn = SimpleFNN(input_size=3, learning_rate=0.01)
+    fnn.train(X_scaled, y, epochs=1000)
+
+    # Test with some example inputs
+    test_samples = [
+        [0.01, 50, 50],  # Low loss, low RTT, good throughput
+        [0.05, 150, 20],  # High loss, high RTT, low throughput
+    ]
+
+    test_samples_scaled = scaler.transform(test_samples)
+
+    print("\nTesting predictions:")
+    for i, sample in enumerate(test_samples):
+        prediction = fnn.forward(test_samples_scaled[i].reshape(1, -1))
+        decision = "Increase" if prediction > 0.5 else "Decrease"
+        print(f"Sample {i + 1}: Loss={sample[0]}, RTT={sample[1]}, Throughput={sample[2]}")
+        print(f"Prediction: {prediction[0][0]:.4f} -> {decision} window\n")

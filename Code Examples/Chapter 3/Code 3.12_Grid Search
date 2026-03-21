@@ -1,0 +1,53 @@
+#Copyright@Zhenhui Yuan, 2025
+#cross-validation was used internally by GridSearchCV, which acts as a surrogate for a validation dataset
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.metrics import mean_squared_error
+import pandas as pd
+import numpy as np
+
+# Simulate a dataset for networking features and latency
+np.random.seed(42)
+data_size = 1000
+data = {
+    "bandwidth": np.random.uniform(10, 100, data_size),
+    "jitter": np.random.uniform(0.1, 5, data_size),
+    "packet_loss": np.random.uniform(0, 1, data_size),
+    "latency": np.random.uniform(5, 50, data_size)
+}
+
+# Convert to DataFrame
+df = pd.DataFrame(data)
+
+# Features and target
+X = df[["bandwidth", "jitter", "packet_loss"]]
+y = df["latency"]
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Define the model
+model = RandomForestRegressor(random_state=42)
+
+# Define the hyperparameter grid
+param_grid = {
+    "n_estimators": [10, 50, 100],
+    "max_depth": [None, 10, 20],
+    "min_samples_split": [2, 5, 10]
+}
+
+# Set up GridSearchCV
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=5, scoring="neg_mean_squared_error", verbose=2)
+
+# Perform grid search
+grid_search.fit(X_train, y_train)
+
+# Best parameters and score
+print("Best Parameters:", grid_search.best_params_)
+print("Best Score (Negative MSE):", grid_search.best_score_)
+
+# Evaluate the best model on the test set
+best_model = grid_search.best_estimator_
+y_pred = best_model.predict(X_test)
+test_mse = mean_squared_error(y_test, y_pred)
+print("Test MSE:", test_mse)

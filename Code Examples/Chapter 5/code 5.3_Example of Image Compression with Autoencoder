@@ -1,0 +1,159 @@
+#Copyright@Zhenhui Yuan, 2025
+
+import numpy as np
+import simpy
+import cv2
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+
+# Network Simulation Parameters
+NETWORK_BANDWIDTH = 50000  # bytes per second
+PACKET_LOSS_RATE = 0.1  # 10% packet loss
+TRANSMISSION_DELAY = 0.5  # seconds
+
+# Image and Compression Parameters
+IMAGE_PATH = '1080p_Nature.jpg'  # Replace with your 1080p image path
+
+
+class NetworkSimulator:
+    def __init__(self, env, bandwidth, packet_loss_rate):
+        self.env = env
+        self.bandwidth = bandwidth
+        self.packet_loss_rate = packet_loss_rate
+        self.transmission_queue = simpy.Store(env)
+
+    def send_data(self, data):
+        """Simulate network transmission with packet loss and bandwidth constraints"""
+        transmission_time = len(data.tobytes()) / self.bandwidth
+
+        if np.random.random() > self.packet_loss_rate:
+            yield self.env.timeout(transmission_time)
+            self.transmission_queue.put(data)
+        else:
+            print(f"Packet loss at {self.env.now}")
+
+
+class AutoEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Encoder
+        self.encoder = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU()
+        )
+
+        # Decoder
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.Tanh()  # Using Tanh to keep values between -1 and 1
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
+
+
+def train_autoencoder(model, image_tensor, epochs=50, learning_rate=1e-3):
+    """Train the autoencoder on the input image"""
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    model.train()
+    for epoch in range(epochs):
+        # Zero the parameter gradients
+        optimizer.zero_grad()
+
+        # Forward pass
+        outputs = model(image_tensor)
+
+        # Compute loss
+        loss = criterion(outputs, image_tensor)
+
+        # Backward pass and optimize
+        loss.backward()
+        optimizer.step()
+
+        if epoch % 10 == 0:
+            print(f'Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}')
+
+    return model
+
+
+def calculate_psnr(original, reconstructed):
+    """Calculate Peak Signal-to-Noise Ratio (PSNR)"""
+    mse = np.mean((original - reconstructed) ** 2)
+    if mse == 0:
+        return float('inf')
+    max_pixel = 255.0
+    return 20 * np.log10(max_pixel / np.sqrt(mse))
+
+
+def simulate_image_transmission():
+    # Load and preprocess image
+    original_image = cv2.imread(IMAGE_PATH)
+    original_image = cv2.resize(original_image, (1920, 1080))
+    original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+
+    # Normalize image for neural network (scale to [-1, 1])
+    image_normalized = original_image.astype(np.float32) / 127.5 - 1
+
+    # Convert to tensor
+    image_tensor = torch.FloatTensor(image_normalized).permute(2, 0, 1).unsqueeze(0)
+
+    # Initialize and train autoencoder
+    autoencoder = AutoEncoder()
+    trained_autoencoder = train_autoencoder(autoencoder, image_tensor)
+
+    # Compress and reconstruct image
+    with torch.no_grad():
+        compressed_image_tensor = trained_autoencoder(image_tensor)
+
+    # Convert back to numpy for visualization
+    compressed_image_np = compressed_image_tensor.squeeze().permute(1, 2, 0).numpy()
+
+    # Denormalize image
+    compressed_image_np = ((compressed_image_np + 1) * 127.5).astype(np.uint8)
+
+    # Visualization
+    plt.figure(figsize=(16, 8))
+
+    # Original Image
+    plt.subplot(1, 3, 1)
+    plt.title('Original Image')
+    plt.imshow(original_image)
+    plt.axis('off')
+
+    # Compressed Image
+    plt.subplot(1, 3, 2)
+    plt.title('Compressed Image')
+    plt.imshow(compressed_image_np)
+    plt.axis('off')
+
+    # Difference Image
+    difference = np.abs(original_image.astype(float) - compressed_image_np.astype(float))
+    plt.subplot(1, 3, 3)
+    plt.title('Difference Image')
+    plt.imshow(difference / difference.max(), cmap='gray')
+    plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Calculate PSNR
+    psnr = calculate_psnr(original_image, compressed_image_np)
+    print(f"Compressed Image PSNR: {psnr:.2f} dB")
+
+
+# Run the simulation
+simulate_image_transmission()

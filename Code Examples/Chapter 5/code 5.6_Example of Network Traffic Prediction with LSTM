@@ -1,0 +1,98 @@
+#Copyright@Zhenhui Yuan, 2025
+
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader, TensorDataset
+
+# Sample Data Preparation: Simulate some network traffic data (e.g., packet count or bandwidth usage)
+# Generate a sine wave to simulate periodic traffic patterns (replace with real data if available)
+time_steps = np.linspace(0, 100, 500)
+traffic_data = 50 + 10 * np.sin(0.2 * time_steps)  # Simple sinusoidal pattern for example
+
+# Normalize data to be between 0 and 1
+scaler = MinMaxScaler()
+traffic_data_normalized = scaler.fit_transform(traffic_data.reshape(-1, 1)).reshape(-1)
+
+
+# Prepare data for LSTM: create sequences with lookback window
+def create_sequences(data, seq_length):
+    sequences, labels = [], []
+    for i in range(len(data) - seq_length):
+        sequence = data[i:i + seq_length]
+        label = data[i + seq_length]
+        sequences.append(sequence)
+        labels.append(label)
+    return np.array(sequences), np.array(labels)
+
+# the lookback window (or sequence length) refers to the number of previous time
+# steps the model uses as input to predict the next time step(s). This window
+# determines how much past information the model considers when making a prediction.
+SEQ_LENGTH = 20
+X, y = create_sequences(traffic_data_normalized, SEQ_LENGTH)
+
+# Convert data to PyTorch tensors
+X_tensor = torch.tensor(X, dtype=torch.float32)
+y_tensor = torch.tensor(y, dtype=torch.float32)
+
+# Create DataLoader
+batch_size = 16
+train_data = TensorDataset(X_tensor, y_tensor)
+train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+
+
+# Define LSTM Model
+class TrafficPredictorLSTM(nn.Module):
+    def __init__(self, input_size=1, hidden_layer_size=50, output_size=1, num_layers=2):
+        super(TrafficPredictorLSTM, self).__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_size, hidden_layer_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_layer_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_layer_size).requires_grad_()
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_layer_size).requires_grad_()
+        out, _ = self.lstm(x, (h0.detach(), c0.detach()))
+        out = self.fc(out[:, -1, :])
+        return out
+
+
+# Initialize model, define loss and optimizer
+model = TrafficPredictorLSTM()
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+# Training loop
+epochs = 100
+for epoch in range(epochs):
+    for inputs, targets in train_loader:
+        inputs = inputs.view(-1, SEQ_LENGTH, 1)  # Reshape for LSTM [batch, seq, feature]
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets.view(-1, 1))
+        loss.backward()
+        optimizer.step()
+    if epoch % 10 == 0:
+        print(f"Epoch {epoch}, Loss: {loss.item()}")
+
+# Predict future traffic (e.g., next 50 points) using the trained model
+model.eval()
+predictions = traffic_data_normalized[-SEQ_LENGTH:].tolist()  # Start with last observed data
+for _ in range(50):  # Predict next 50 points
+    seq = torch.tensor(predictions[-SEQ_LENGTH:], dtype=torch.float32).view(1, SEQ_LENGTH, 1)
+    with torch.no_grad():
+        pred = model(seq).item()
+    predictions.append(pred)
+
+# Inverse transform predictions back to original scale
+predicted_traffic = scaler.inverse_transform(np.array(predictions[-50:]).reshape(-1, 1))
+
+# Plot results
+plt.plot(time_steps, traffic_data, label='Original Traffic Data')
+future_steps = np.linspace(time_steps[-1], time_steps[-1] + 10, 50)
+plt.plot(future_steps, predicted_traffic, label='Predicted Traffic', linestyle='--')
+plt.legend()
+plt.show()

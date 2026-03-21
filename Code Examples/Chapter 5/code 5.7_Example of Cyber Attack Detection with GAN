@@ -1,0 +1,302 @@
+#Copyright@Zhenhui Yuan, 2025
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models, optimizers
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from sklearn.model_selection import train_test_split
+import os
+
+
+# 1. Data preparation function for KDD99 dataset
+def preprocess_kdd99_data(data_path):
+    """
+    Load and preprocess KDD99 network traffic data.
+    """
+    # Column names for KDD99 dataset
+    col_names = [
+        'duration', 'protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes',
+        'land', 'wrong_fragment', 'urgent', 'hot', 'num_failed_logins', 'logged_in',
+        'num_compromised', 'root_shell', 'su_attempted', 'num_root', 'num_file_creations',
+        'num_shells', 'num_access_files', 'num_outbound_cmds', 'is_host_login',
+        'is_guest_login', 'count', 'srv_count', 'serror_rate', 'srv_serror_rate',
+        'rerror_rate', 'srv_rerror_rate', 'same_srv_rate', 'diff_srv_rate',
+        'srv_diff_host_rate', 'dst_host_count', 'dst_host_srv_count', 'dst_host_same_srv_rate',
+        'dst_host_diff_srv_rate', 'dst_host_same_src_port_rate', 'dst_host_srv_diff_host_rate',
+        'dst_host_serror_rate', 'dst_host_srv_serror_rate', 'dst_host_rerror_rate',
+        'dst_host_srv_rerror_rate', 'label'
+    ]
+
+    # Load data
+    print("Loading KDD99 dataset...")
+    df = pd.read_csv(data_path, names=col_names)
+
+    # Extract only normal traffic for GAN training
+    print("Filtering normal traffic...")
+    normal_df = df[df['label'] == 'normal.']
+
+    # Handle categorical features
+    print("Processing categorical features...")
+    categorical_cols = ['protocol_type', 'service', 'flag']
+    normal_df_encoded = pd.get_dummies(normal_df, columns=categorical_cols)
+
+    # Select only numeric features (exclude the label column)
+    numeric_cols = [col for col in normal_df_encoded.columns if col != 'label']
+    features = normal_df_encoded[numeric_cols]
+
+    # Normalize data
+    print("Normalizing data...")
+    scaler = MinMaxScaler(feature_range=(-1, 1))  # Normalize to range suitable for tanh activation
+    normalized_data = scaler.fit_transform(features)
+
+    # Train-test split
+    print("Splitting data...")
+    X_train, X_test = train_test_split(normalized_data, test_size=0.2, random_state=42)
+
+    print(f"Data shape: {X_train.shape}")
+    return X_train, X_test, scaler, features.columns
+
+
+# 2. Create the Generator
+def build_generator(latent_dim, output_dim):
+    model = models.Sequential()
+
+    # First hidden layer
+    model.add(layers.Dense(256, input_dim=latent_dim))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.BatchNormalization())
+
+    # Second hidden layer
+    model.add(layers.Dense(512))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.BatchNormalization())
+
+    # Third hidden layer
+    model.add(layers.Dense(1024))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.BatchNormalization())
+
+    # Output layer
+    model.add(layers.Dense(output_dim, activation='tanh'))
+
+    return model
+
+
+# 3. Create the Discriminator
+def build_discriminator(input_dim):
+    model = models.Sequential()
+
+    # First hidden layer
+    model.add(layers.Dense(1024, input_dim=input_dim))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.Dropout(0.3))
+
+    # Second hidden layer
+    model.add(layers.Dense(512))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.Dropout(0.3))
+
+    # Third hidden layer
+    model.add(layers.Dense(256))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.Dropout(0.3))
+
+    # Output layer
+    model.add(layers.Dense(1, activation='sigmoid'))
+
+    return model
+
+
+# 4. Create the GAN
+def build_gan(generator, discriminator):
+    # Make discriminator not trainable within GAN model
+    discriminator.trainable = False
+
+    # Connect the generator and discriminator
+    model = models.Sequential()
+    model.add(generator)
+    model.add(discriminator)
+
+    return model
+
+
+# 5. Train the GAN
+def train_gan(X_train, epochs=10000, batch_size=128, latent_dim=100, save_interval=1000):
+    # Get the shape of the input
+    input_dim = X_train.shape[1]
+
+    # Build the generator and discriminator
+    generator = build_generator(latent_dim, input_dim)
+    discriminator = build_discriminator(input_dim)
+
+    # Build the GAN
+    gan = build_gan(generator, discriminator)
+
+    # Compile the models
+    discriminator.compile(loss='binary_crossentropy', optimizer=optimizers.Adam(0.0002, 0.5))
+    gan.compile(loss='binary_crossentropy', optimizer=optimizers.Adam(0.0002, 0.5))
+
+    # Create folder for saving models and samples
+    os.makedirs("gan_models", exist_ok=True)
+    os.makedirs("gan_samples", exist_ok=True)
+
+    # Training loop
+    d_losses, g_losses = [], []
+    for epoch in range(epochs):
+        # ---------------------
+        #  Train Discriminator
+        # ---------------------
+
+        # Select a random batch of network traffic data
+        idx = np.random.randint(0, X_train.shape[0], batch_size)
+        real_traffic = X_train[idx]
+
+        # Generate a batch of fake traffic
+        noise = np.random.normal(0, 1, (batch_size, latent_dim))
+        fake_traffic = generator.predict(noise)
+
+        # Train the discriminator
+        d_loss_real = discriminator.train_on_batch(real_traffic, np.ones((batch_size, 1)) * 0.9)  # Soft labels
+        d_loss_fake = discriminator.train_on_batch(fake_traffic, np.zeros((batch_size, 1)))
+        d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
+        # ---------------------
+        #  Train Generator
+        # ---------------------
+
+        # Generate a new batch of noise
+        noise = np.random.normal(0, 1, (batch_size * 2, latent_dim))
+
+        # Train the generator (wants discriminator to mistake fake for real)
+        g_loss = gan.train_on_batch(noise, np.ones((batch_size * 2, 1)))
+
+        # Store the losses
+        d_losses.append(d_loss)
+        g_losses.append(g_loss)
+
+        # Print progress
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch}, D Loss: {d_loss}, G Loss: {g_loss}")
+
+        # Save generator and generate samples at save_interval
+        if epoch % save_interval == 0:
+            # Save the generator
+            generator.save(f"gan_models/generator_epoch_{epoch}.h5")
+
+            # Generate samples
+            noise = np.random.normal(0, 1, (100, latent_dim))
+            generated_samples = generator.predict(noise)
+            np.save(f"gan_samples/samples_epoch_{epoch}.npy", generated_samples)
+
+    return generator, discriminator, d_losses, g_losses
+
+
+# 6. Detect anomalies in network traffic
+def detect_anomalies(discriminator, X_test, threshold=0.5):
+    """
+    Use the trained GAN to detect anomalies in network traffic.
+    Returns anomaly scores for each sample.
+    """
+    # Generate scores from the discriminator
+    anomaly_scores = 1 - discriminator.predict(X_test)
+
+    # Detect anomalies based on threshold
+    anomalies = anomaly_scores > threshold
+
+    return anomaly_scores, anomalies
+
+
+# 7. Generate synthetic dataset
+def generate_synthetic_data(generator, num_samples, latent_dim, scaler, feature_names):
+    """
+    Generate synthetic network traffic data using the trained generator.
+    Returns a denormalized pandas DataFrame with original feature names.
+    """
+    # Generate noise
+    noise = np.random.normal(0, 1, (num_samples, latent_dim))
+
+    # Generate synthetic data
+    synthetic_data = generator.predict(noise)
+
+    # Denormalize the data
+    denormalized_data = scaler.inverse_transform(synthetic_data)
+
+    # Convert to DataFrame with original column names
+    synthetic_df = pd.DataFrame(denormalized_data, columns=feature_names)
+
+    return synthetic_df
+
+
+# 8. Main function
+def main():
+    # Path to KDD99 dataset
+    data_path = "../../Dataset/KDD99/kddcup.data_10_percent.gz"  # Use 10% subset to start (or full dataset if available)
+
+    # Preprocess data
+    X_train, X_test, scaler, feature_names = preprocess_kdd99_data(data_path)
+
+    # Train the GAN
+    print("Starting GAN training...")
+    generator, discriminator, d_losses, g_losses = train_gan(
+        X_train,
+        epochs=5000,  # Reduced for demonstration
+        batch_size=128,
+        latent_dim=100,
+        save_interval=1000
+    )
+
+    # Save the final models
+    generator.save("gan_models/generator_final.h5")
+    discriminator.save("gan_models/discriminator_final.h5")
+
+    # Plot the training progress
+    plt.figure(figsize=(10, 6))
+    plt.plot(d_losses, label='Discriminator Loss')
+    plt.plot(g_losses, label='Generator Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title('GAN Training Progress')
+    plt.savefig('gan_training_progress.png')
+
+    # Detect anomalies
+    print("Detecting anomalies...")
+    anomaly_scores, anomalies = detect_anomalies(discriminator, X_test)
+
+    # Plot anomaly scores
+    plt.figure(figsize=(10, 6))
+    plt.hist(anomaly_scores, bins=50)
+    plt.axvline(x=0.5, color='r', linestyle='--', label='Threshold')
+    plt.xlabel('Anomaly Score')
+    plt.ylabel('Count')
+    plt.title('Distribution of Anomaly Scores')
+    plt.legend()
+    plt.savefig('anomaly_scores_distribution.png')
+
+    # Print anomaly results
+    print(f"Number of detected anomalies: {np.sum(anomalies)}")
+    print(f"Percentage of anomalies: {np.mean(anomalies) * 100:.2f}%")
+
+    # Generate synthetic dataset
+    print("Generating synthetic network traffic dataset...")
+    num_synthetic_samples = 10000
+    synthetic_df = generate_synthetic_data(generator, num_synthetic_samples, 100, scaler, feature_names)
+
+    # Save synthetic dataset
+    synthetic_df.to_csv("synthetic_network_traffic.csv", index=False)
+    print(f"Synthetic dataset with {num_synthetic_samples} samples saved to 'synthetic_network_traffic.csv'")
+
+    # Print sample comparison
+    print("\nReal data sample (first 5 rows):")
+    real_sample = scaler.inverse_transform(X_train[:5])
+    real_df = pd.DataFrame(real_sample, columns=feature_names)
+    print(real_df.head())
+
+    print("\nSynthetic data sample (first 5 rows):")
+    print(synthetic_df.head())
+
+
+if __name__ == "__main__":
+    main()

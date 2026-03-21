@@ -1,0 +1,19 @@
+#Copyright@Zhenhui Yuan, 2025
+
+import numpy as np
+from sklearn.linear_model import LinearRegression
+
+# Training data
+X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+y = np.array([0, 1, 1, 0])
+
+# Fit linear regression
+model = LinearRegression()
+model.fit(X, y)
+
+# Coefficients and intercept
+print(f"Weights: {model.coef_}, Bias: {model.intercept_}")
+
+# Predictions
+predictions = model.predict(X)
+print("Predictions:", predictions)
